@@ -21,11 +21,6 @@ import traceGenerator from '../../../demo/trace-generators';
 
 describe('TraceTimelineViewer/duck', () => {
   const trace = transformTraceData(traceGenerator.trace({ numberOfSpans: 10 }));
-  const searchSetup = {
-    uniqueText: '--something-unique',
-    spanID: trace.spans[0].spanID,
-  };
-  trace.spans[0].operationName += searchSetup.uniqueText;
 
   let store;
 
@@ -36,7 +31,6 @@ describe('TraceTimelineViewer/duck', () => {
   it('the initial state has no details, collapsed children or text search', () => {
     const state = store.getState();
     expect(state.childrenHiddenIDs).toEqual(new Set());
-    expect(state.findMatches).not.toBeDefined();
     expect(state.detailStates).toEqual(new Map());
   });
 
@@ -62,20 +56,16 @@ describe('TraceTimelineViewer/duck', () => {
     let action;
     const width = 0.5;
     const id = 'some-id';
-    const { spanID, uniqueText } = searchSetup;
 
     action = actions.childrenToggle(id);
     store.dispatch(action);
     action = actions.detailToggle(id);
-    store.dispatch(action);
-    action = actions.find(trace, uniqueText);
     store.dispatch(action);
     action = actions.setSpanNameColumnWidth(width);
     store.dispatch(action);
 
     let state = store.getState();
     expect(state.traceID).toBe(trace.traceID);
-    expect(state.findMatchesIDs).toEqual(new Set([spanID]));
     expect(state.childrenHiddenIDs).not.toEqual(new Set());
     expect(state.detailStates).not.toEqual(new Map());
     expect(state.spanNameColumnWidth).toBe(width);
@@ -84,7 +74,6 @@ describe('TraceTimelineViewer/duck', () => {
     store.dispatch(action);
     state = store.getState();
     expect(state.traceID).toBe(id);
-    expect(state.findMatchesIDs).toBe(null);
     expect(state.childrenHiddenIDs).toEqual(new Set());
     expect(state.detailStates).toEqual(new Map());
     expect(state.spanNameColumnWidth).toBe(width);
@@ -135,12 +124,14 @@ describe('TraceTimelineViewer/duck', () => {
     // --- 2
     // - 3
     // --- 4
+    // - 5
     const spans = [
       { spanID: 0, depth: 0, hasChildren: true },
       { spanID: 1, depth: 1, hasChildren: true },
       { spanID: 2, depth: 2, hasChildren: false },
       { spanID: 3, depth: 1, hasChildren: true },
       { spanID: 4, depth: 2, hasChildren: false },
+      { spanID: 5, depth: 1, hasChildren: false },
     ];
 
     const oneSpanCollapsed = new Set([1]);
@@ -296,10 +287,44 @@ describe('TraceTimelineViewer/duck', () => {
     expect(store.getState().detailStates.get(id)).toEqual(toggledDetail);
   });
 
-  it('filters based on search text', () => {
-    const { uniqueText, spanID } = searchSetup;
-    expect(store.getState().findMatchesIDs).toBe(null);
-    store.dispatch(actions.find(trace, uniqueText));
-    expect(store.getState().findMatchesIDs).toEqual(new Set([spanID]));
+  describe('hoverIndentGuideIds', () => {
+    const existingSpanId = 'existingSpanId';
+    const newSpanId = 'newSpanId';
+
+    it('the initial state has an empty set of hoverIndentGuideIds', () => {
+      const state = store.getState();
+      expect(state.hoverIndentGuideIds).toEqual(new Set());
+    });
+
+    it('adds a spanID to an initial state', () => {
+      const action = actions.addHoverIndentGuideId(newSpanId);
+      store.dispatch(action);
+      expect(store.getState().hoverIndentGuideIds).toEqual(new Set([newSpanId]));
+    });
+
+    it('adds a spanID to a populated state', () => {
+      store = createStore(reducer, {
+        hoverIndentGuideIds: new Set([existingSpanId]),
+      });
+      const action = actions.addHoverIndentGuideId(newSpanId);
+      store.dispatch(action);
+      expect(store.getState().hoverIndentGuideIds).toEqual(new Set([existingSpanId, newSpanId]));
+    });
+
+    it('should not error when removing a spanID from an initial state', () => {
+      const action = actions.removeHoverIndentGuideId(newSpanId);
+      store.dispatch(action);
+      expect(store.getState().hoverIndentGuideIds).toEqual(new Set());
+    });
+
+    it('remove a spanID from a populated state', () => {
+      const secondExistingSpanId = 'secondExistingSpanId';
+      store = createStore(reducer, {
+        hoverIndentGuideIds: new Set([existingSpanId, secondExistingSpanId]),
+      });
+      const action = actions.removeHoverIndentGuideId(existingSpanId);
+      store.dispatch(action);
+      expect(store.getState().hoverIndentGuideIds).toEqual(new Set([secondExistingSpanId]));
+    });
   });
 });

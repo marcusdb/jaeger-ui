@@ -24,15 +24,10 @@ import ListView from './ListView';
 import SpanBarRow from './SpanBarRow';
 import DetailState from './SpanDetail/DetailState';
 import SpanDetailRow from './SpanDetailRow';
-import {
-  findServerChildSpan,
-  formatDuration,
-  getViewedBounds,
-  isErrorSpan,
-  spanContainsErredSpan,
-} from './utils';
+import { findServerChildSpan, getViewedBounds, isErrorSpan, spanContainsErredSpan } from './utils';
+import getLinks from '../../../model/link-patterns';
 import type { Accessors } from '../ScrollManager';
-import type { Log, Span, Trace } from '../../../types';
+import type { Log, Span, Trace, KeyValuePair } from '../../../types/trace';
 import colorGenerator from '../../../utils/color-generator';
 
 import './VirtualizedTraceView.css';
@@ -55,13 +50,11 @@ type VirtualizedTraceViewProps = {
   detailStates: Map<string, ?DetailState>,
   detailTagsToggle: string => void,
   detailToggle: string => void,
-  find: (?Trace, ?string) => void,
   findMatchesIDs: Set<string>,
   registerAccessors: Accessors => void,
   setSpanNameColumnWidth: number => void,
   setTrace: (?string) => void,
   spanNameColumnWidth: number,
-  textFilter: ?string,
   trace: Trace,
 };
 
@@ -141,40 +134,23 @@ export class VirtualizedTraceViewImpl extends React.PureComponent<VirtualizedTra
     this.clippingCssClasses = getCssClasses(currentViewRangeTime);
     this.rowStates = generateRowStates(trace.spans, childrenHiddenIDs, detailStates);
 
-    const { find, setTrace, textFilter } = props;
+    const { setTrace } = props;
     const traceID = trace ? trace.traceID : null;
     setTrace(traceID);
-    if (textFilter) {
-      find(trace, textFilter);
-    }
   }
 
   componentWillUpdate(nextProps: VirtualizedTraceViewProps) {
-    const {
-      childrenHiddenIDs,
-      detailStates,
-      registerAccessors,
-      textFilter,
-      trace,
-      currentViewRangeTime,
-    } = this.props;
+    const { childrenHiddenIDs, detailStates, registerAccessors, trace, currentViewRangeTime } = this.props;
     const {
       currentViewRangeTime: nextViewRangeTime,
       childrenHiddenIDs: nextHiddenIDs,
       detailStates: nextDetailStates,
-      find,
       registerAccessors: nextRegisterAccessors,
       setTrace,
-      textFilter: nextTextFilter,
       trace: nextTrace,
     } = nextProps;
     if (trace !== nextTrace) {
       setTrace(nextTrace ? nextTrace.traceID : null);
-      if (nextTextFilter) {
-        find(nextTrace, nextTextFilter);
-      }
-    } else if (textFilter !== nextTextFilter) {
-      find(nextTrace, nextTextFilter);
     }
     if (trace !== nextTrace || childrenHiddenIDs !== nextHiddenIDs || detailStates !== nextDetailStates) {
       this.rowStates = nextTrace ? generateRowStates(nextTrace.spans, nextHiddenIDs, nextDetailStates) : [];
@@ -264,6 +240,8 @@ export class VirtualizedTraceViewImpl extends React.PureComponent<VirtualizedTra
     return DEFAULT_HEIGHTS.detail;
   };
 
+  linksGetter = (span: Span, items: KeyValuePair[], itemIndex: number) => getLinks(span, items, itemIndex);
+
   renderRow = (key: string, style: Style, index: number, attrs: {}) => {
     const { isDetail, span, spanIndex } = this.rowStates[index];
     return isDetail
@@ -292,7 +270,7 @@ export class VirtualizedTraceViewImpl extends React.PureComponent<VirtualizedTra
     const color = colorGenerator.getColorByKey(serviceName);
     const isCollapsed = childrenHiddenIDs.has(spanID);
     const isDetailExpanded = detailStates.has(spanID);
-    const isFilteredOut = Boolean(findMatchesIDs) && !findMatchesIDs.has(spanID);
+    const isMatchingFilter = Boolean(findMatchesIDs) && findMatchesIDs.has(spanID);
     const showErrorIcon = isErrorSpan(span) || (isCollapsed && spanContainsErredSpan(trace.spans, spanIndex));
     const viewBounds = getViewedBounds({
       min: trace.startTime,
@@ -331,20 +309,15 @@ export class VirtualizedTraceViewImpl extends React.PureComponent<VirtualizedTra
           className={this.clippingCssClasses}
           color={color}
           columnDivision={spanNameColumnWidth}
-          depth={span.depth}
-          label={formatDuration(span.duration)}
           isChildrenExpanded={!isCollapsed}
           isDetailExpanded={isDetailExpanded}
-          isFilteredOut={isFilteredOut}
-          isParent={span.hasChildren}
+          isMatchingFilter={isMatchingFilter}
           numTicks={NUM_TICKS}
           onDetailToggled={detailToggle}
           onChildrenToggled={childrenToggle}
-          operationName={span.operationName}
           rpc={rpc}
-          serviceName={span.process.serviceName}
           showErrorIcon={showErrorIcon}
-          spanID={spanID}
+          span={span}
           viewEnd={viewBounds.end}
           viewStart={viewBounds.start}
         />
@@ -362,7 +335,6 @@ export class VirtualizedTraceViewImpl extends React.PureComponent<VirtualizedTra
       detailStates,
       detailTagsToggle,
       detailToggle,
-      findMatchesIDs,
       spanNameColumnWidth,
       trace,
     } = this.props;
@@ -371,7 +343,6 @@ export class VirtualizedTraceViewImpl extends React.PureComponent<VirtualizedTra
       return null;
     }
     const color = colorGenerator.getColorByKey(serviceName);
-    const isFilteredOut = Boolean(findMatchesIDs) && !findMatchesIDs.has(spanID);
     return (
       <div className="VirtualizedTraceView--row" key={key} style={{ ...style, zIndex: 1 }} {...attrs}>
         <SpanDetailRow
@@ -379,7 +350,7 @@ export class VirtualizedTraceViewImpl extends React.PureComponent<VirtualizedTra
           columnDivision={spanNameColumnWidth}
           onDetailToggled={detailToggle}
           detailState={detailState}
-          isFilteredOut={isFilteredOut}
+          linksGetter={this.linksGetter}
           logItemToggle={detailLogItemToggle}
           logsToggle={detailLogsToggle}
           processToggle={detailProcessToggle}

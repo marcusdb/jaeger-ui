@@ -14,8 +14,33 @@
 
 import React from 'react';
 import { shallow } from 'enzyme';
+import { Dropdown, Icon } from 'antd';
 
-import KeyValuesTable from './KeyValuesTable';
+import CopyIcon from '../../../common/CopyIcon';
+
+import KeyValuesTable, { LinkValue } from './KeyValuesTable';
+
+describe('LinkValue', () => {
+  const title = 'titleValue';
+  const href = 'hrefValue';
+  const childrenText = 'childrenTextValue';
+  const wrapper = shallow(
+    <LinkValue href={href} title={title}>
+      {childrenText}
+    </LinkValue>
+  );
+
+  it('renders as expected', () => {
+    expect(wrapper.find('a').prop('href')).toBe(href);
+    expect(wrapper.find('a').prop('title')).toBe(title);
+    expect(wrapper.find('a').text()).toMatch(/childrenText/);
+  });
+
+  it('renders correct Icon', () => {
+    expect(wrapper.find(Icon).hasClass('KeyValueTable--linkIcon')).toBe(true);
+    expect(wrapper.find(Icon).prop('type')).toBe('export');
+  });
+});
 
 describe('<KeyValuesTable>', () => {
   let wrapper;
@@ -36,6 +61,70 @@ describe('<KeyValuesTable>', () => {
     expect(trs.length).toBe(data.length);
     trs.forEach((tr, i) => {
       expect(tr.find('.KeyValueTable--keyColumn').text()).toMatch(data[i].key);
+    });
+  });
+
+  it('renders a single link correctly', () => {
+    wrapper.setProps({
+      linksGetter: (array, i) =>
+        array[i].key === 'span.kind'
+          ? [
+              {
+                url: `http://example.com/?kind=${encodeURIComponent(array[i].value)}`,
+                text: `More info about ${array[i].value}`,
+              },
+            ]
+          : [],
+    });
+
+    const anchor = wrapper.find(LinkValue);
+    expect(anchor).toHaveLength(1);
+    expect(anchor.prop('href')).toBe('http://example.com/?kind=client');
+    expect(anchor.prop('title')).toBe('More info about client');
+    expect(
+      anchor
+        .closest('tr')
+        .find('td')
+        .first()
+        .text()
+    ).toBe('span.kind');
+  });
+
+  it('renders multiple links correctly', () => {
+    wrapper.setProps({
+      linksGetter: (array, i) =>
+        array[i].key === 'span.kind'
+          ? [
+              { url: `http://example.com/1?kind=${encodeURIComponent(array[i].value)}`, text: 'Example 1' },
+              { url: `http://example.com/2?kind=${encodeURIComponent(array[i].value)}`, text: 'Example 2' },
+            ]
+          : [],
+    });
+    const dropdown = wrapper.find(Dropdown);
+    const menu = shallow(dropdown.prop('overlay'));
+    const anchors = menu.find(LinkValue);
+    expect(anchors).toHaveLength(2);
+    const firstAnchor = anchors.first();
+    expect(firstAnchor.prop('href')).toBe('http://example.com/1?kind=client');
+    expect(firstAnchor.children().text()).toBe('Example 1');
+    const secondAnchor = anchors.last();
+    expect(secondAnchor.prop('href')).toBe('http://example.com/2?kind=client');
+    expect(secondAnchor.children().text()).toBe('Example 2');
+    expect(
+      dropdown
+        .closest('tr')
+        .find('td')
+        .first()
+        .text()
+    ).toBe('span.kind');
+  });
+
+  it('renders a <CopyIcon /> with correct copyText for each data element', () => {
+    const copyIcons = wrapper.find(CopyIcon);
+    expect(copyIcons.length).toBe(data.length);
+    copyIcons.forEach((copyIcon, i) => {
+      expect(copyIcon.prop('copyText')).toBe(JSON.stringify(data[i], null, 2));
+      expect(copyIcon.prop('tooltipTitle')).toBe('Copy JSON');
     });
   });
 });

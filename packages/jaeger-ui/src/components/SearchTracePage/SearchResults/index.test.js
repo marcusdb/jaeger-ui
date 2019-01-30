@@ -19,6 +19,7 @@ import SearchResults from './';
 import * as markers from './index.markers';
 import ResultItem from './ResultItem';
 import ScatterPlot from './ScatterPlot';
+import DiffSelection from './DiffSelection.js';
 import LoadingIndicator from '../../common/LoadingIndicator';
 
 describe('<SearchResults>', () => {
@@ -29,10 +30,11 @@ describe('<SearchResults>', () => {
   beforeEach(() => {
     traces = [{ traceID: 'a', spans: [], processes: {} }, { traceID: 'b', spans: [], processes: {} }];
     props = {
-      traces,
+      diffCohort: [],
       goToTrace: () => {},
       loading: false,
       maxTraceDuration: 1,
+      traces,
     };
     wrapper = shallow(<SearchResults {...props} />);
   });
@@ -45,6 +47,16 @@ describe('<SearchResults>', () => {
   it('shows a loading indicator if loading traces', () => {
     wrapper.setProps({ loading: true });
     expect(wrapper.find(LoadingIndicator).length).toBe(1);
+  });
+
+  it('hide scatter plot if queryparam hideGraph', () => {
+    wrapper.setProps({ hideGraph: true, embed: true, getSearchURL: () => 'SEARCH_URL' });
+    expect(wrapper.find(ScatterPlot).length).toBe(0);
+  });
+
+  it('hide DiffSelection when disableComparisons = true', () => {
+    wrapper.setProps({ disableComparisons: true });
+    expect(wrapper.find(DiffSelection).length).toBe(0);
   });
 
   describe('search finished with results', () => {

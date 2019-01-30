@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 import React from 'react';
 import { shallow, mount } from 'enzyme';
 
@@ -22,6 +21,8 @@ import SpanDetailRow from './SpanDetailRow';
 import { DEFAULT_HEIGHTS, VirtualizedTraceViewImpl } from './VirtualizedTraceView';
 import traceGenerator from '../../../demo/trace-generators';
 import transformTraceData from '../../../model/transform-trace-data';
+
+jest.mock('./SpanTreeOffset');
 
 describe('<VirtualizedTraceViewImpl>', () => {
   let wrapper;
@@ -39,13 +40,11 @@ describe('<VirtualizedTraceViewImpl>', () => {
     detailStates: new Map(),
     detailTagsToggle: jest.fn(),
     detailToggle: jest.fn(),
-    find: jest.fn(),
     findMatchesIDs: null,
     registerAccessors: jest.fn(),
     setSpanNameColumnWidth: jest.fn(),
     setTrace: jest.fn(),
     spanNameColumnWidth: 0.5,
-    textFilter: null,
   };
 
   function expandRow(rowIndex) {
@@ -108,30 +107,6 @@ describe('<VirtualizedTraceViewImpl>', () => {
     const _trace = { ...trace, traceID };
     wrapper.setProps({ trace: _trace });
     expect(props.setTrace.mock.calls).toEqual([[traceID]]);
-  });
-
-  describe('applies searchText to gloabl state.traceTimeline', () => {
-    it('ctor invokes find() if there is a textFilter', () => {
-      const textFilter = 'some-text';
-      wrapper = shallow(<VirtualizedTraceViewImpl {...props} textFilter={textFilter} />);
-      expect(props.find.mock.calls).toEqual([[trace, textFilter]]);
-    });
-
-    it('handles textFiter updates', () => {
-      const textFilter = 'different-text';
-      wrapper.setProps({ textFilter });
-      expect(props.find.mock.calls).toEqual([[trace, textFilter]]);
-    });
-
-    it('propagates textFilter if the trace changes', () => {
-      const textFilter = 'some-text';
-      wrapper.setProps({ textFilter });
-      props.find.mockReset();
-      const traceID = 'some-other-id';
-      const _trace = { ...trace, traceID };
-      wrapper.setProps({ trace: _trace });
-      expect(props.find.mock.calls).toEqual([[_trace, textFilter]]);
-    });
   });
 
   describe('props.registerAccessors', () => {
@@ -318,19 +293,15 @@ describe('<VirtualizedTraceViewImpl>', () => {
           <SpanBarRow
             className={instance.clippingCssClasses}
             columnDivision={props.spanNameColumnWidth}
-            depth={span.depth}
             isChildrenExpanded
             isDetailExpanded={false}
-            isFilteredOut={false}
-            isParent={span.hasChildren}
+            isMatchingFilter={false}
             numTicks={5}
             onDetailToggled={props.detailToggle}
             onChildrenToggled={props.childrenToggle}
-            operationName={span.operationName}
             rpc={undefined}
-            serviceName={span.process.serviceName}
             showErrorIcon={false}
-            spanID={span.spanID}
+            span={span}
           />
         )
       ).toBe(true);
@@ -361,7 +332,6 @@ describe('<VirtualizedTraceViewImpl>', () => {
             columnDivision={props.spanNameColumnWidth}
             onDetailToggled={props.detailToggle}
             detailState={detailState}
-            isFilteredOut={false}
             logItemToggle={props.detailLogItemToggle}
             logsToggle={props.detailLogsToggle}
             processToggle={props.detailProcessToggle}

@@ -15,53 +15,59 @@
 // limitations under the License.
 
 import * as React from 'react';
+import { Input } from 'antd';
 import _clamp from 'lodash/clamp';
 import _mapValues from 'lodash/mapValues';
-import _maxBy from 'lodash/maxBy';
-import _values from 'lodash/values';
 import { connect } from 'react-redux';
-import type { RouterHistory, Match } from 'react-router-dom';
 import { bindActionCreators } from 'redux';
+
+import type { Location, Match, RouterHistory } from 'react-router-dom';
 
 import ArchiveNotifier from './ArchiveNotifier';
 import { actions as archiveActions } from './ArchiveNotifier/duck';
 import { trackFilter, trackRange } from './index.track';
-import type { CombokeysHandler, ShortcutCallbacks } from './keyboard-shortcuts';
 import { merge as mergeShortcuts, reset as resetShortcuts } from './keyboard-shortcuts';
 import { cancel as cancelScroll, scrollBy, scrollTo } from './scroll-page';
 import ScrollManager from './ScrollManager';
-import SpanGraph from './SpanGraph';
+import TraceGraph from './TraceGraph/TraceGraph';
+import { trackSlimHeaderToggle } from './TracePageHeader/TracePageHeader.track';
 import TracePageHeader from './TracePageHeader';
-import { trackSlimHeaderToggle } from './TracePageHeader.track';
 import TraceTimelineViewer from './TraceTimelineViewer';
-import type { ViewRange, ViewRangeTimeUpdate } from './types';
+import { getLocation, getUrl } from './url';
 import ErrorMessage from '../common/ErrorMessage';
 import LoadingIndicator from '../common/LoadingIndicator';
 import * as jaegerApiActions from '../../actions/jaeger-api';
-import { getTraceName } from '../../model/trace-viewer';
-import type { Trace } from '../../types';
-import type { TraceArchive, TracesArchive } from '../../types/archive';
-import type { Config } from '../../types/config';
-import prefixUrl from '../../utils/prefix-url';
+import { fetchedState } from '../../constants';
+
+import type { CombokeysHandler, ShortcutCallbacks } from './keyboard-shortcuts';
+import type { ViewRange, ViewRangeTimeUpdate } from './types';
+import type { FetchedTrace, ReduxState } from '../../types';
+import type { TraceArchive } from '../../types/archive';
+import type { EmbeddedState } from '../../types/embedded';
+import type { KeyValuePair, Span } from '../../types/trace';
 
 import './index.css';
 
 type TracePageProps = {
-  archiveEnabled: boolean,
-  archiveTraceState: ?TraceArchive,
-  archiveTrace: string => void,
   acknowledgeArchive: string => void,
+  archiveEnabled: boolean,
+  archiveTrace: string => void,
+  archiveTraceState: ?TraceArchive,
+  embedded: null | EmbeddedState,
   fetchTrace: string => void,
   history: RouterHistory,
   id: string,
-  loading: boolean,
-  trace: ?Trace,
+  location: Location,
+  searchUrl: null | string,
+  trace: ?FetchedTrace,
 };
 
 type TracePageState = {
+  findMatchesIDs: ?Set<string>,
   headerHeight: ?number,
   slimView: boolean,
-  textFilter: ?string,
+  traceGraphView: boolean,
+  textFilter: string,
   viewRange: ViewRange,
 };
 
@@ -93,19 +99,24 @@ export function makeShortcutCallbacks(adjRange: (number, number) => void): Short
   return _mapValues(shortcutConfig, getHandler);
 }
 
-export default class TracePage extends React.PureComponent<TracePageProps, TracePageState> {
+// export for tests
+export class TracePageImpl extends React.PureComponent<TracePageProps, TracePageState> {
   props: TracePageProps;
   state: TracePageState;
 
   _headerElm: ?Element;
+  _searchBar: { current: Input | null };
   _scrollManager: ScrollManager;
 
   constructor(props: TracePageProps) {
     super(props);
+    const { embedded, trace } = props;
     this.state = {
+      findMatchesIDs: null,
       headerHeight: null,
-      slimView: false,
+      slimView: Boolean(embedded && embedded.timeline.collapseTitle),
       textFilter: '',
+      traceGraphView: false,
       viewRange: {
         time: {
           current: [0, 1],
@@ -113,10 +124,11 @@ export default class TracePage extends React.PureComponent<TracePageProps, Trace
       },
     };
     this._headerElm = null;
-    this._scrollManager = new ScrollManager(props.trace, {
+    this._scrollManager = new ScrollManager(trace && trace.data, {
       scrollBy,
       scrollTo,
     });
+    this._searchBar = React.createRef();
     resetShortcuts();
   }
 
@@ -139,24 +151,28 @@ export default class TracePage extends React.PureComponent<TracePageProps, Trace
     shortcutCallbacks.scrollPageUp = scrollPageUp;
     shortcutCallbacks.scrollToNextVisibleSpan = scrollToNextVisibleSpan;
     shortcutCallbacks.scrollToPrevVisibleSpan = scrollToPrevVisibleSpan;
+    shortcutCallbacks.clearSearch = this.clearSearch;
+    shortcutCallbacks.searchSpans = this.focusOnSearchBar;
     mergeShortcuts(shortcutCallbacks);
   }
 
   componentWillReceiveProps(nextProps: TracePageProps) {
     if (this._scrollManager) {
-      this._scrollManager.setTrace(nextProps.trace);
+      const { trace } = nextProps;
+      this._scrollManager.setTrace(trace && trace.data);
     }
   }
 
-  componentDidUpdate({ trace: prevTrace }: TracePageProps) {
-    const { trace } = this.props;
+  componentDidUpdate({ id: prevID }: TracePageProps) {
+    const { id, trace } = this.props;
     this.setHeaderHeight(this._headerElm);
     if (!trace) {
       this.ensureTraceFetched();
       return;
     }
-    if (!(trace instanceof Error) && (!prevTrace || prevTrace.traceID !== trace.traceID)) {
+    if (prevID !== id) {
       this.updateViewRangeTime(0, 1);
+      this.clearSearch();
     }
   }
 
@@ -201,9 +217,74 @@ export default class TracePage extends React.PureComponent<TracePageProps, Trace
     }
   };
 
-  updateTextFilter = (textFilter: ?string) => {
+  filterSpans = (textFilter: string) => {
+    const spans = this.props.trace && this.props.trace.data && this.props.trace.data.spans;
+    if (!spans) return null;
+
+    // if a span field includes at least one filter in includeFilters, the span is a match
+    const includeFilters = [];
+
+    // values with keys that include text in any one of the excludeKeys will be ignored
+    const excludeKeys = [];
+
+    // split textFilter by whitespace, remove empty strings, and extract includeFilters and excludeKeys
+    textFilter
+      .split(' ')
+      .map(s => s.trim())
+      .filter(s => s)
+      .forEach(w => {
+        if (w[0] === '-') {
+          excludeKeys.push(w.substr(1).toLowerCase());
+        } else {
+          includeFilters.push(w.toLowerCase());
+        }
+      });
+
+    const isTextInFilters = (filters: Array<string>, text: string) =>
+      filters.some(filter => text.toLowerCase().includes(filter));
+
+    const isTextInKeyValues = (kvs: Array<KeyValuePair>) =>
+      kvs
+        ? kvs.some(kv => {
+            // ignore checking key and value for a match if key is in excludeKeys
+            if (isTextInFilters(excludeKeys, kv.key)) return false;
+            // match if key or value matches an item in includeFilters
+            return (
+              isTextInFilters(includeFilters, kv.key) || isTextInFilters(includeFilters, kv.value.toString())
+            );
+          })
+        : false;
+
+    const isSpanAMatch = (span: Span) =>
+      isTextInFilters(includeFilters, span.operationName) ||
+      isTextInFilters(includeFilters, span.process.serviceName) ||
+      isTextInKeyValues(span.tags) ||
+      span.logs.some(log => isTextInKeyValues(log.fields)) ||
+      isTextInKeyValues(span.process.tags);
+
+    // declare as const because need to disambiguate the type
+    const rv: Set<string> = new Set(spans.filter(isSpanAMatch).map((span: Span) => span.spanID));
+    return rv;
+  };
+
+  updateTextFilter = (textFilter: string) => {
+    let findMatchesIDs;
+    if (textFilter.trim()) {
+      findMatchesIDs = this.filterSpans(textFilter);
+    } else {
+      findMatchesIDs = null;
+    }
     trackFilter(textFilter);
-    this.setState({ textFilter });
+    this.setState({ textFilter, findMatchesIDs });
+  };
+
+  clearSearch = () => {
+    this.updateTextFilter('');
+    if (this._searchBar.current) this._searchBar.current.blur();
+  };
+
+  focusOnSearchBar = () => {
+    if (this._searchBar.current) this._searchBar.current.focus();
   };
 
   updateViewRangeTime = (start: number, end: number, trackSrc?: string) => {
@@ -227,6 +308,11 @@ export default class TracePage extends React.PureComponent<TracePageProps, Trace
     this.setState({ slimView: !slimView });
   };
 
+  toggleTraceGraphView = () => {
+    const { traceGraphView } = this.state;
+    this.setState({ traceGraphView: !traceGraphView });
+  };
+
   archiveTrace = () => {
     const { id, archiveTrace } = this.props;
     archiveTrace(id);
@@ -238,86 +324,105 @@ export default class TracePage extends React.PureComponent<TracePageProps, Trace
   };
 
   ensureTraceFetched() {
-    const { fetchTrace, trace, id, loading } = this.props;
-    if (!trace && !loading) {
+    const { fetchTrace, location, trace, id } = this.props;
+    if (!trace) {
       fetchTrace(id);
       return;
     }
     const { history } = this.props;
     if (id && id !== id.toLowerCase()) {
-      history.push(prefixUrl(`/trace/${id.toLowerCase()}`));
+      history.replace(getLocation(id.toLowerCase(), location.state));
     }
   }
 
   render() {
-    const { archiveEnabled, archiveTraceState, loading, trace } = this.props;
-    const { slimView, headerHeight, textFilter, viewRange } = this.state;
-    if (!trace) {
-      return loading ? <LoadingIndicator className="u-mt-vast" centered /> : <section />;
+    const { archiveEnabled, archiveTraceState, embedded, id, searchUrl, trace } = this.props;
+    const { slimView, traceGraphView, headerHeight, textFilter, viewRange, findMatchesIDs } = this.state;
+    if (!trace || trace.state === fetchedState.LOADING) {
+      return <LoadingIndicator className="u-mt-vast" centered />;
     }
-    if (trace instanceof Error) {
-      return <ErrorMessage className="ub-m3" error={trace} />;
+    const { data } = trace;
+    if (trace.state === fetchedState.ERROR || !data) {
+      return <ErrorMessage className="ub-m3" error={trace.error || 'Unknown error'} />;
     }
-    const { duration, processes, spans, startTime, traceID } = trace;
-    const maxSpanDepth = _maxBy(spans, 'depth').depth + 1;
-    const numberOfServices = new Set(_values(processes).map(p => p.serviceName)).size;
+
+    const isEmbedded = Boolean(embedded);
+    const headerProps = {
+      slimView,
+      textFilter,
+      traceGraphView,
+      viewRange,
+      canCollapse: !embedded || !embedded.timeline.hideSummary || !embedded.timeline.hideMinimap,
+      clearSearch: this.clearSearch,
+      hideMap: Boolean(traceGraphView || (embedded && embedded.timeline.hideMinimap)),
+      hideSummary: Boolean(embedded && embedded.timeline.hideSummary),
+      linkToStandalone: getUrl(id),
+      nextResult: this._scrollManager.scrollToNextVisibleSpan,
+      onArchiveClicked: this.archiveTrace,
+      onSlimViewClicked: this.toggleSlimView,
+      onTraceGraphViewClicked: this.toggleTraceGraphView,
+      prevResult: this._scrollManager.scrollToPrevVisibleSpan,
+      ref: this._searchBar,
+      resultCount: findMatchesIDs ? findMatchesIDs.size : 0,
+      showArchiveButton: !isEmbedded && archiveEnabled,
+      showShortcutsHelp: !isEmbedded,
+      showStandaloneLink: isEmbedded,
+      showViewOptions: !isEmbedded,
+      toSearch: searchUrl,
+      trace: data,
+      updateNextViewRangeTime: this.updateNextViewRangeTime,
+      updateTextFilter: this.updateTextFilter,
+      updateViewRangeTime: this.updateViewRangeTime,
+    };
+
     return (
       <div>
         {archiveEnabled && (
           <ArchiveNotifier acknowledge={this.acknowledgeArchive} archivedState={archiveTraceState} />
         )}
         <div className="Tracepage--headerSection" ref={this.setHeaderHeight}>
-          <TracePageHeader
-            duration={duration}
-            maxDepth={maxSpanDepth}
-            name={getTraceName(spans)}
-            numServices={numberOfServices}
-            numSpans={spans.length}
-            slimView={slimView}
-            timestamp={startTime}
-            traceID={traceID}
-            onSlimViewClicked={this.toggleSlimView}
-            textFilter={textFilter}
-            updateTextFilter={this.updateTextFilter}
-            archiveButtonVisible={archiveEnabled}
-            onArchiveClicked={this.archiveTrace}
-          />
-          {!slimView && (
-            <SpanGraph
-              trace={trace}
-              viewRange={viewRange}
-              updateNextViewRangeTime={this.updateNextViewRangeTime}
-              updateViewRangeTime={this.updateViewRangeTime}
-            />
-          )}
+          <TracePageHeader {...headerProps} />
         </div>
-        {headerHeight && (
-          <section style={{ paddingTop: headerHeight }}>
-            <TraceTimelineViewer
-              registerAccessors={this._scrollManager.setAccessors}
-              textFilter={textFilter}
-              trace={trace}
-              updateNextViewRangeTime={this.updateNextViewRangeTime}
-              updateViewRangeTime={this.updateViewRangeTime}
-              viewRange={viewRange}
-            />
-          </section>
-        )}
+        {headerHeight &&
+          (traceGraphView ? (
+            <section style={{ paddingTop: headerHeight }}>
+              <TraceGraph headerHeight={headerHeight} trace={data} />
+            </section>
+          ) : (
+            <section style={{ paddingTop: headerHeight }}>
+              <TraceTimelineViewer
+                registerAccessors={this._scrollManager.setAccessors}
+                findMatchesIDs={findMatchesIDs}
+                trace={data}
+                updateNextViewRangeTime={this.updateNextViewRangeTime}
+                updateViewRangeTime={this.updateViewRangeTime}
+                viewRange={viewRange}
+              />
+            </section>
+          ))}
       </div>
     );
   }
 }
 
 // export for tests
-export function mapStateToProps(
-  state: { archive: TracesArchive, config: Config, trace: { loading: boolean, traces: { [string]: Trace } } },
-  ownProps: { match: Match }
-) {
+export function mapStateToProps(state: ReduxState, ownProps: { match: Match }) {
   const { id } = ownProps.match.params;
-  const trace = id ? state.trace.traces[id] : null;
-  const archiveTraceState = id ? state.archive[id] : null;
-  const archiveEnabled = Boolean(state.config.archiveEnabled);
-  return { archiveEnabled, archiveTraceState, id, trace, loading: state.trace.loading };
+  const { archive, config, embedded, router } = state;
+  const { traces } = state.trace;
+  const trace = id ? traces[id] : null;
+  const archiveTraceState = id ? archive[id] : null;
+  const archiveEnabled = Boolean(config.archiveEnabled);
+  const { state: locationState } = router.location;
+  const searchUrl = (locationState && locationState.fromSearch) || null;
+  return {
+    archiveEnabled,
+    archiveTraceState,
+    embedded,
+    id,
+    searchUrl,
+    trace,
+  };
 }
 
 // export for tests
@@ -327,4 +432,4 @@ export function mapDispatchToProps(dispatch: Function) {
   return { acknowledgeArchive, archiveTrace, fetchTrace };
 }
 
-export const ConnectedTracePage = connect(mapStateToProps, mapDispatchToProps)(TracePage);
+export default connect(mapStateToProps, mapDispatchToProps)(TracePageImpl);

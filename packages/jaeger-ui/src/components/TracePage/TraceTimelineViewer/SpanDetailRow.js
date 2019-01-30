@@ -20,7 +20,7 @@ import SpanDetail from './SpanDetail';
 import DetailState from './SpanDetail/DetailState';
 import SpanTreeOffset from './SpanTreeOffset';
 import TimelineRow from './TimelineRow';
-import type { Log, Span } from '../../../types';
+import type { Log, Span, KeyValuePair, Link } from '../../../types/trace';
 
 import './SpanDetailRow.css';
 
@@ -29,7 +29,7 @@ type SpanDetailRowProps = {
   columnDivision: number,
   detailState: DetailState,
   onDetailToggled: string => void,
-  isFilteredOut: boolean,
+  linksGetter: ?(Span, KeyValuePair[], number) => Link[],
   logItemToggle: (string, Log) => void,
   logsToggle: string => void,
   processToggle: string => void,
@@ -45,12 +45,16 @@ export default class SpanDetailRow extends React.PureComponent<SpanDetailRowProp
     this.props.onDetailToggled(this.props.span.spanID);
   };
 
+  _linksGetter = (items: KeyValuePair[], itemIndex: number) => {
+    const { linksGetter, span } = this.props;
+    return linksGetter ? linksGetter(span, items, itemIndex) : [];
+  };
+
   render() {
     const {
       color,
       columnDivision,
       detailState,
-      isFilteredOut,
       logItemToggle,
       logsToggle,
       processToggle,
@@ -59,9 +63,9 @@ export default class SpanDetailRow extends React.PureComponent<SpanDetailRowProp
       traceStartTime,
     } = this.props;
     return (
-      <TimelineRow className={`detail-row ${isFilteredOut ? 'is-filtered-out' : ''}`}>
+      <TimelineRow className="detail-row">
         <TimelineRow.Cell width={columnDivision}>
-          <SpanTreeOffset level={span.depth + 1} />
+          <SpanTreeOffset span={span} />
           <span>
             <span
               className="detail-row-expanded-accent"
@@ -76,6 +80,7 @@ export default class SpanDetailRow extends React.PureComponent<SpanDetailRowProp
           <div className="detail-info-wrapper" style={{ borderTopColor: color }}>
             <SpanDetail
               detailState={detailState}
+              linksGetter={this._linksGetter}
               logItemToggle={logItemToggle}
               logsToggle={logsToggle}
               processToggle={processToggle}

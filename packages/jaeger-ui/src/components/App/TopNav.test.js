@@ -16,11 +16,12 @@ import React from 'react';
 import { shallow } from 'enzyme';
 import { Link } from 'react-router-dom';
 
-import TopNav from './TopNav';
+import { TopNavImpl as TopNav } from './TopNav';
 
 describe('<TopNav>', () => {
   const labelGitHub = 'GitHub';
   const githubUrl = 'https://github.com/uber/jaeger';
+  const blogUrl = 'https://medium.com/jaegertracing/';
   const labelAbout = 'About Jaeger';
   const dropdownItems = [
     {
@@ -30,20 +31,33 @@ describe('<TopNav>', () => {
     {
       label: 'Twitter',
       url: 'https://twitter.com/JaegerTracing',
+      anchorTarget: '_self',
     },
   ];
 
+  const configMenuGroup = {
+    label: labelAbout,
+    items: dropdownItems,
+  };
+
   const defaultProps = {
-    menuConfig: [
-      {
-        label: labelGitHub,
-        url: githubUrl,
-      },
-      {
-        label: labelAbout,
-        items: dropdownItems,
-      },
-    ],
+    config: {
+      menu: [
+        {
+          label: labelGitHub,
+          url: githubUrl,
+          anchorTarget: '_self',
+        },
+        {
+          label: 'Blog',
+          url: blogUrl,
+        },
+        configMenuGroup,
+      ],
+    },
+    router: {
+      location: { location: { pathname: 'some-path ' } },
+    },
   };
 
   let wrapper;
@@ -81,6 +95,33 @@ describe('<TopNav>', () => {
       expect(item.length).toBe(1);
       expect(item.prop('label')).toBe(labelAbout);
       expect(item.prop('items')).toBe(dropdownItems);
+    });
+
+    it('adds target=_self to top-level item', () => {
+      const item = wrapper.find(`[href="${githubUrl}"]`);
+      expect(item.length).toBe(1);
+      expect(item.find(`[target="_self"]`).length).toBe(1);
+    });
+
+    it('sets target=_blank by default', () => {
+      const item = wrapper.find(`[href="${blogUrl}"]`);
+      expect(item.length).toBe(1);
+      expect(item.find(`[target="_blank"]`).length).toBe(1);
+    });
+
+    describe('<CustomNavDropdown>', () => {
+      beforeEach(() => {
+        wrapper = shallow(<TopNav.CustomNavDropdown {...configMenuGroup} />);
+      });
+
+      it('renders sub-menu items', () => {
+        const subMenu = shallow(wrapper.find('Dropdown').props().overlay);
+        dropdownItems.forEach(itemConfig => {
+          const item = subMenu.find(`[href="${itemConfig.url}"]`);
+          expect(item.length).toBe(1);
+          expect(item.prop('target')).toBe(itemConfig.anchorTarget || '_blank');
+        });
+      });
     });
   });
 });

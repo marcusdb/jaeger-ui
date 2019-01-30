@@ -12,49 +12,200 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import * as jaegerApiActions from '../../src/actions/jaeger-api';
-import traceReducer from '../../src/reducers/trace';
-import traceGenerator from '../../src/demo/trace-generators';
-import transformTraceData from '../../src/model/transform-trace-data';
+import * as jaegerApiActions from '../actions/jaeger-api';
+import { fetchedState } from '../constants';
+import traceGenerator from '../demo/trace-generators';
+import transformTraceData from '../model/transform-trace-data';
+import traceReducer from '../reducers/trace';
 
-const generatedTrace = traceGenerator.trace({ numberOfSpans: 1 });
-const { traceID } = generatedTrace;
+const ACTION_POSTFIX_FULFILLED = '_FULFILLED';
+const ACTION_POSTFIX_PENDING = '_PENDING';
+const ACTION_POSTFIX_REJECTED = '_REJECTED';
 
-it('trace reducer should set loading true on a fetch', () => {
-  const state = traceReducer(undefined, {
-    type: `${jaegerApiActions.fetchTrace}_PENDING`,
+const trace = traceGenerator.trace({ numberOfSpans: 1 });
+const { traceID: id } = trace;
+
+describe('fetch a trace', () => {
+  it('sets loading true on a fetch', () => {
+    const state = traceReducer(undefined, {
+      type: `${jaegerApiActions.fetchTrace}${ACTION_POSTFIX_PENDING}`,
+      meta: { id },
+    });
+    const outcome = { [id]: { id, state: fetchedState.LOADING } };
+    expect(state.traces).toEqual(outcome);
   });
-  expect(state.loading).toBe(true);
+
+  it('handles a successful FETCH_TRACE', () => {
+    const state = traceReducer(undefined, {
+      type: `${jaegerApiActions.fetchTrace}${ACTION_POSTFIX_FULFILLED}`,
+      payload: { data: [trace] },
+      meta: { id },
+    });
+    expect(state.traces).toEqual({ [id]: { id, data: transformTraceData(trace), state: fetchedState.DONE } });
+  });
+
+  it('handles a failed FETCH_TRACE', () => {
+    const error = new Error();
+    const state = traceReducer(undefined, {
+      type: `${jaegerApiActions.fetchTrace}${ACTION_POSTFIX_REJECTED}`,
+      payload: error,
+      meta: { id },
+    });
+    expect(state.traces).toEqual({ [id]: { error, id, state: fetchedState.ERROR } });
+    expect(state.traces[id].error).toBe(error);
+  });
 });
 
-it('trace reducer should handle a successful FETCH_TRACE', () => {
-  const state = traceReducer(undefined, {
-    type: `${jaegerApiActions.fetchTrace}_FULFILLED`,
-    payload: { data: [generatedTrace] },
-    meta: { id: traceID },
+describe('fetch multiple traces', () => {
+  const traceB = traceGenerator.trace({ numberOfSpans: 1 });
+  const { traceID: idB } = traceB;
+
+  it('sets loading to true for all pending IDs', () => {
+    const traces = { preExisting: 'this-trace-is-pre-existing' };
+    const state = traceReducer(
+      { traces },
+      {
+        type: `${jaegerApiActions.fetchMultipleTraces}${ACTION_POSTFIX_PENDING}`,
+        meta: { ids: [id, idB] },
+      }
+    );
+    const outcome = {
+      ...traces,
+      [id]: { id, state: fetchedState.LOADING },
+      [idB]: { id: idB, state: fetchedState.LOADING },
+    };
+    expect(state.traces).toEqual(outcome);
   });
-  expect(state.traces).toEqual({ [traceID]: transformTraceData(generatedTrace) });
-  expect(state.loading).toBe(false);
+
+  describe('handles a successful request', () => {
+    it('transforms and saves all trace data', () => {
+      const traces = { preExisting: 'this-trace-is-pre-existing' };
+      const state = traceReducer(
+        { traces },
+        {
+          type: `${jaegerApiActions.fetchMultipleTraces}${ACTION_POSTFIX_FULFILLED}`,
+          payload: { data: [trace, traceB] },
+        }
+      );
+      const outcome = {
+        ...traces,
+        [id]: { id, data: transformTraceData(trace), state: fetchedState.DONE },
+        [idB]: { id: idB, data: transformTraceData(traceB), state: fetchedState.DONE },
+      };
+      expect(state.traces).toEqual(outcome);
+    });
+
+    it('saves all error data', () => {
+      const msg = 'a-message';
+      const traceID = 'a-trace-id';
+      const traces = { preExisting: 'this-trace-is-pre-existing' };
+      const state = traceReducer(
+        { traces },
+        {
+          type: `${jaegerApiActions.fetchMultipleTraces}${ACTION_POSTFIX_FULFILLED}`,
+          payload: { data: [], errors: [{ msg, traceID }] },
+        }
+      );
+      const outcome = {
+        ...traces,
+        [traceID]: { id: traceID, error: expect.any(Error), state: fetchedState.ERROR },
+      };
+      expect(state.traces).toEqual(outcome);
+    });
+  });
+
+  it('handles a failed request', () => {
+    const error = 'error-info';
+    const traces = { preExisting: 'this-trace-is-pre-existing' };
+    const state = traceReducer(
+      { traces },
+      {
+        type: `${jaegerApiActions.fetchMultipleTraces}${ACTION_POSTFIX_REJECTED}`,
+        payload: error,
+        meta: { ids: [id, idB] },
+      }
+    );
+    const outcome = {
+      ...traces,
+      [id]: { id, error, state: fetchedState.ERROR },
+      [idB]: { id: idB, error, state: fetchedState.ERROR },
+    };
+    expect(state.traces).toEqual(outcome);
+  });
 });
 
-it('trace reducer should handle a failed FETCH_TRACE', () => {
-  const error = new Error();
-  const state = traceReducer(undefined, {
-    type: `${jaegerApiActions.fetchTrace}_REJECTED`,
-    payload: error,
-    meta: { id: traceID },
-  });
-  expect(state.traces).toEqual({ [traceID]: error });
-  expect(state.traces[traceID]).toBe(error);
-  expect(state.loading).toBe(false);
-});
+describe('search traces', () => {
+  const query = 'some-query';
 
-it('trace reducer should handle a successful SEARCH_TRACES', () => {
-  const state = traceReducer(undefined, {
-    type: `${jaegerApiActions.searchTraces}_FULFILLED`,
-    payload: { data: [generatedTrace] },
-    meta: { query: 'whatever' },
+  it('handles a pending request', () => {
+    const state = traceReducer(undefined, {
+      type: `${jaegerApiActions.searchTraces}${ACTION_POSTFIX_PENDING}`,
+      meta: { query },
+    });
+    const outcome = {
+      query,
+      results: [],
+      state: fetchedState.LOADING,
+    };
+    expect(state.search).toEqual(outcome);
   });
-  expect(state.traces).toEqual({ [traceID]: transformTraceData(generatedTrace) });
-  expect(state.loading).toBe(false);
+
+  it('handles a successful request', () => {
+    const state = traceReducer(
+      { search: { query } },
+      {
+        type: `${jaegerApiActions.searchTraces}${ACTION_POSTFIX_FULFILLED}`,
+        payload: { data: [trace] },
+        meta: { query },
+      }
+    );
+    const outcome = {
+      traces: {
+        [id]: {
+          id,
+          data: transformTraceData(trace),
+          state: fetchedState.DONE,
+        },
+      },
+      search: {
+        query,
+        state: fetchedState.DONE,
+        results: [id],
+      },
+    };
+    expect(state).toEqual(outcome);
+  });
+
+  it('handles a failed request', () => {
+    const error = 'some-error';
+    const state = traceReducer(
+      { search: { query } },
+      {
+        type: `${jaegerApiActions.searchTraces}${ACTION_POSTFIX_REJECTED}`,
+        payload: error,
+        meta: { query },
+      }
+    );
+    const outcome = {
+      error,
+      query,
+      results: [],
+      state: fetchedState.ERROR,
+    };
+    expect(state.search).toEqual(outcome);
+  });
+
+  it('ignores the results with the wrong query', () => {
+    const otherQuery = 'some-other-query';
+    [ACTION_POSTFIX_FULFILLED, ACTION_POSTFIX_REJECTED].forEach(postfix => {
+      const state = traceReducer(
+        { search: { query } },
+        {
+          type: `${jaegerApiActions.searchTraces}${postfix}`,
+          meta: { query: otherQuery },
+        }
+      );
+      expect(state.search).toEqual({ query });
+    });
+  });
 });

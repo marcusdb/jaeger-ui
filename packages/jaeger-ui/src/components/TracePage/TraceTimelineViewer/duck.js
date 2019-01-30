@@ -14,7 +14,6 @@
 
 import { createActions, handleActions } from 'redux-actions';
 
-import getFilteredSpans from './get-filtered-spans';
 import DetailState from './SpanDetail/DetailState';
 import generateActionTypes from '../../../utils/generate-action-types';
 
@@ -31,34 +30,34 @@ import generateActionTypes from '../../../utils/generate-action-types';
 //   traceID: string,
 //   spanNameColumnWidth:
 //   childrenHiddenIDs: Set<spanID>,
-//   findMatches: ?Set<spanID>,
 //   detailStates: Map<spanID, DetailState>
 // }
 
 export function newInitialState({ spanNameColumnWidth = null, traceID = null } = {}) {
   return {
-    traceID,
-    spanNameColumnWidth: spanNameColumnWidth || 0.25,
     childrenHiddenIDs: new Set(),
     detailStates: new Map(),
-    findMatchesIDs: null,
+    hoverIndentGuideIds: new Set(),
+    spanNameColumnWidth: spanNameColumnWidth || 0.25,
+    traceID,
   };
 }
 
 export const actionTypes = generateActionTypes('@jaeger-ui/trace-timeline-viewer', [
-  'SET_TRACE',
-  'SET_SPAN_NAME_COLUMN_WIDTH',
+  'ADD_HOVER_INDENT_GUIDE_ID',
   'CHILDREN_TOGGLE',
-  'EXPAND_ALL',
   'COLLAPSE_ALL',
-  'EXPAND_ONE',
   'COLLAPSE_ONE',
   'DETAIL_TOGGLE',
   'DETAIL_TAGS_TOGGLE',
   'DETAIL_PROCESS_TOGGLE',
   'DETAIL_LOGS_TOGGLE',
   'DETAIL_LOG_ITEM_TOGGLE',
-  'FIND',
+  'EXPAND_ALL',
+  'EXPAND_ONE',
+  'REMOVE_HOVER_INDENT_GUIDE_ID',
+  'SET_SPAN_NAME_COLUMN_WIDTH',
+  'SET_TRACE',
 ]);
 
 const fullActions = createActions({
@@ -74,7 +73,8 @@ const fullActions = createActions({
   [actionTypes.DETAIL_PROCESS_TOGGLE]: spanID => ({ spanID }),
   [actionTypes.DETAIL_LOGS_TOGGLE]: spanID => ({ spanID }),
   [actionTypes.DETAIL_LOG_ITEM_TOGGLE]: (spanID, logItem) => ({ logItem, spanID }),
-  [actionTypes.FIND]: (trace, searchText) => ({ searchText, trace }),
+  [actionTypes.ADD_HOVER_INDENT_GUIDE_ID]: spanID => ({ spanID }),
+  [actionTypes.REMOVE_HOVER_INDENT_GUIDE_ID]: spanID => ({ spanID }),
 });
 
 export const actions = fullActions.jaegerUi.traceTimelineViewer;
@@ -138,7 +138,9 @@ export function collapseOne(state, { payload }) {
   const childrenHiddenIDs = spans.reduce((res, curSpan) => {
     if (nearestCollapsedAncestor && curSpan.depth <= nearestCollapsedAncestor.depth) {
       res.add(nearestCollapsedAncestor.spanID);
-      nearestCollapsedAncestor = curSpan;
+      if (curSpan.hasChildren) {
+        nearestCollapsedAncestor = curSpan;
+      }
     } else if (curSpan.hasChildren && !res.has(curSpan.spanID)) {
       nearestCollapsedAncestor = curSpan;
     }
@@ -209,11 +211,20 @@ function detailLogItemToggle(state, { payload }) {
   return { ...state, detailStates };
 }
 
-function find(state, { payload }) {
-  const { searchText, trace } = payload;
-  const needle = searchText ? searchText.trim() : null;
-  const findMatchesIDs = needle ? getFilteredSpans(trace, needle) : null;
-  return { ...state, findMatchesIDs };
+function addHoverIndentGuideId(state, { payload }) {
+  const { spanID } = payload;
+  const newHoverIndentGuideIds = new Set(state.hoverIndentGuideIds);
+  newHoverIndentGuideIds.add(spanID);
+
+  return { ...state, hoverIndentGuideIds: newHoverIndentGuideIds };
+}
+
+function removeHoverIndentGuideId(state, { payload }) {
+  const { spanID } = payload;
+  const newHoverIndentGuideIds = new Set(state.hoverIndentGuideIds);
+  newHoverIndentGuideIds.delete(spanID);
+
+  return { ...state, hoverIndentGuideIds: newHoverIndentGuideIds };
 }
 
 export default handleActions(
@@ -230,7 +241,8 @@ export default handleActions(
     [actionTypes.DETAIL_PROCESS_TOGGLE]: detailProcessToggle,
     [actionTypes.DETAIL_LOGS_TOGGLE]: detailLogsToggle,
     [actionTypes.DETAIL_LOG_ITEM_TOGGLE]: detailLogItemToggle,
-    [actionTypes.FIND]: find,
+    [actionTypes.ADD_HOVER_INDENT_GUIDE_ID]: addHoverIndentGuideId,
+    [actionTypes.REMOVE_HOVER_INDENT_GUIDE_ID]: removeHoverIndentGuideId,
   },
   newInitialState()
 );

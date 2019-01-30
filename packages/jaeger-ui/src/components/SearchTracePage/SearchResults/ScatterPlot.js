@@ -20,7 +20,7 @@ import { XYPlot, XAxis, YAxis, MarkSeries, Hint } from 'react-vis';
 import { compose, withState, withProps } from 'recompose';
 
 import { FALLBACK_TRACE_NAME } from '../../../constants';
-import { formatDuration } from '../../../utils/date';
+import { ONE_MILLISECOND, formatDuration } from '../../../utils/date';
 
 import './react-vis.css';
 import './ScatterPlot.css';
@@ -36,8 +36,12 @@ function ScatterPlotImpl(props) {
         width={containerWidth}
         height={200}
       >
-        <XAxis title="Time" tickTotal={4} tickFormat={t => moment(t).format('hh:mm:ss a')} />
-        <YAxis title="Duration" tickTotal={3} tickFormat={t => formatDuration(t, 'milliseconds')} />
+        <XAxis
+          title="Time"
+          tickTotal={4}
+          tickFormat={t => moment(t / ONE_MILLISECOND).format('hh:mm:ss a')}
+        />
+        <YAxis title="Duration" tickTotal={3} tickFormat={t => formatDuration(t)} />
         <MarkSeries
           sizeRange={[3, 10]}
           opacity={0.5}
@@ -85,5 +89,7 @@ const ScatterPlot = compose(
     onValueOut: () => setOverValue(null),
   }))
 )(ScatterPlotImpl);
+
+export { ScatterPlotImpl };
 
 export default dimensions()(ScatterPlot);
